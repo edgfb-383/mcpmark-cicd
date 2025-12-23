@@ -1,0 +1,192 @@
+name: Pull Request Automation
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Run ESLint
+        id: eslint
+        run: |
+          npm run lint 2>&1 | tee eslint-results.txt
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+      - name: Run Prettier Check
+        id: prettier
+        run: |
+          npx prettier --check . 2>&1 | tee prettier-results.txt
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+      - name: Post Code Quality Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const eslintResults = fs.readFileSync('eslint-results.txt', 'utf8');
+            const prettierResults = fs.readFileSync('prettier-results.txt', 'utf8');
+            const commentBody = `
+            ## Code Quality Report
+            ### ESLint Results
+            \`\`\`
+            ${eslintResults}
+            \`\`\`
+            ### Prettier Results
+            \`\`\`
+            ${prettierResults}
+            \`\`\`
+            `;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: commentBody
+            });
+        if: always()
+
+  testing-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Run Tests with Coverage
+        id: test
+        run: |
+          npm test -- --coverage 2>&1 | tee test-coverage.txt
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+      - name: Upload Coverage Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-coverage
+          path: coverage/
+        if: always()
+      - name: Post Test Coverage Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const coverageResults = fs.readFileSync('test-coverage.txt', 'utf8');
+            const commentBody = `
+            ## Test Coverage Report
+            \`\`\`
+            ${coverageResults}
+            \`\`\`
+            `;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: commentBody
+            });
+        if: always()
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Run Dependency Vulnerability Check
+        id: npm-audit
+        run: |
+          npm audit --json 2>&1 | tee npm-audit-results.json
+          npm audit 2>&1 | tee npm-audit-results.txt
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+      - name: Secret Scanning
+        id: secret-scan
+        uses: trufflesecurity/trufflehog@v3.65.0
+        with:
+          path: .
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          output: secret-scan-results.txt
+      - name: Post Security Scan Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const auditResults = fs.readFileSync('npm-audit-results.txt', 'utf8');
+            const secretResults = fs.existsSync('secret-scan-results.txt') ? fs.readFileSync('secret-scan-results.txt', 'utf8') : 'No secret scan results found.';
+            const commentBody = `
+            ## Security Scan Report
+            ### Dependencies Vulnerabilities
+            \`\`\`
+            ${auditResults}
+            \`\`\`
+            ### Secret Scan Results
+            \`\`\`
+            ${secretResults}
+            \`\`\`
+            `;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: commentBody
+            });
+        if: always()
+
+  build-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - name: Build Application
+        id: build
+        run: |
+          npm run build 2>&1 | tee build-results.txt
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+      - name: Validate Endpoints (example)
+        id: endpoints
+        run: |
+          echo "Validating endpoints..."
+          echo "Endpoint validation completed (example) - adjust this step to match your application's actual endpoints" > endpoint-validation.txt
+      - name: Upload Deployment Preview Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            dist/
+            build/
+        if: always()
+      - name: Post Build Validation Status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const buildResults = fs.readFileSync('build-results.txt', 'utf8');
+            const endpointResults = fs.readFileSync('endpoint-validation.txt', 'utf8');
+            const commentBody = `
+            ## Build Validation
+            ### Build Results
+            \`\`\`
+            ${buildResults}
+            \`\`\`
+            ### Endpoint Validation
+            \`\`\`
+            ${endpointResults}
+            \`\`\`
+            `;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: commentBody
+            });
+        if: always()
